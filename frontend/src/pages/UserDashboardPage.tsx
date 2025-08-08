@@ -34,7 +34,8 @@ import {
   Loader2,
   Plus,
   Clock,
-  Shield
+  Shield,
+  CreditCard
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -618,12 +619,6 @@ export default function UserDashboardPage() {
                       <History className="h-4 w-4 mr-2" />
                     )}
                     Refresh
-                  </Button>
-                  <Button 
-                    onClick={() => setShowTopupModal(true)}
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Topup Quota
                   </Button>
                 </div>
               </div>
