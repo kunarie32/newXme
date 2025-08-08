@@ -44,8 +44,26 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import TopupModal from '@/components/TopupModal';
 import TopupHistory from '@/components/TopupHistory';
+
+interface PaymentModalData {
+  reference: string;
+  checkout_url: string;
+  qr_url?: string;
+  pay_code?: string;
+  payment_name: string;
+  final_amount: number;
+  status: string;
+  expired_time: number;
+}
 
 export default function UserDashboardPage() {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
@@ -58,6 +76,10 @@ export default function UserDashboardPage() {
   const [activeTab, setActiveTab] = useState<'install' | 'history' | 'topup'>('install');
   const [showTopupModal, setShowTopupModal] = useState(false);
   const [showTopupHistory, setShowTopupHistory] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentModalData, setPaymentModalData] = useState<PaymentModalData | null>(null);
+  const [selectedTransaction, setSelectedTransaction] = useState<TopupTransaction | null>(null);
+  const [showTransactionDetails, setShowTransactionDetails] = useState(false);
   
   // Install form state
   const [installForm, setInstallForm] = useState<CreateInstallRequest>({
@@ -221,6 +243,7 @@ export default function UserDashboardPage() {
     const statusConfig = {
       'PAID': { variant: 'default' as const, label: 'Paid', className: 'bg-green-500' },
       'UNPAID': { variant: 'secondary' as const, label: 'Unpaid', className: 'bg-yellow-500' },
+      'PENDING': { variant: 'secondary' as const, label: 'Pending', className: 'bg-yellow-500' },
       'EXPIRED': { variant: 'destructive' as const, label: 'Expired', className: '' },
       'FAILED': { variant: 'destructive' as const, label: 'Failed', className: '' },
     };
@@ -233,6 +256,43 @@ export default function UserDashboardPage() {
         {config.label}
       </Badge>
     );
+  };
+
+  const handlePayTransaction = (transaction: TopupTransaction) => {
+    if (transaction.checkout_url) {
+      setPaymentModalData({
+        reference: transaction.reference,
+        checkout_url: transaction.checkout_url,
+        qr_url: transaction.qr_url || undefined,
+        pay_code: transaction.pay_code,
+        payment_name: transaction.payment_method,
+        final_amount: transaction.final_amount,
+        status: transaction.status,
+        expired_time: transaction.expired_time
+      });
+      setShowPaymentModal(true);
+    } else {
+      toast({
+        variant: 'destructive',
+        title: 'Payment URL not available',
+        description: 'This transaction cannot be paid. Please create a new topup.',
+      });
+    }
+  };
+
+  const handleViewDetails = (transaction: TopupTransaction) => {
+    setSelectedTransaction(transaction);
+    setShowTransactionDetails(true);
+  };
+
+  const isTransactionPayable = (transaction: TopupTransaction) => {
+    if (transaction.status !== 'UNPAID' && transaction.status !== 'PENDING') {
+      return false;
+    }
+    
+    // Check if not expired
+    const now = Math.floor(Date.now() / 1000);
+    return transaction.expired_time > now;
   };
 
   if (isLoading) {
@@ -645,64 +705,49 @@ export default function UserDashboardPage() {
               ) : (
                 <div className="space-y-3">
                   {topupHistory.map((transaction) => (
-                    <Card key={transaction.id}>
+                    <Card key={transaction.id} className="hover:shadow-md transition-shadow">
                       <CardContent className="p-4">
-                        <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <div className="h-10 w-10 bg-primary/10 rounded-full flex items-center justify-center">
                               <CreditCard className="h-5 w-5 text-primary" />
                             </div>
                             <div>
                               <p className="font-medium">{transaction.quantity} Quota Purchase</p>
-                              <p className="text-sm text-muted-foreground flex items-center gap-1">
-                                <Code className="h-3 w-3" />
-                                {transaction.reference || transaction.merchant_ref}
+                              <p className="text-sm text-muted-foreground">
+                                {formatCurrency(transaction.final_amount)}
                               </p>
                             </div>
                           </div>
-                          {getTopupStatusBadge(transaction.status)}
+                          <div className="flex items-center gap-2">
+                            {getTopupStatusBadge(transaction.status)}
+                          </div>
                         </div>
 
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                          <div>
-                            <p className="text-muted-foreground">Amount</p>
-                            <p className="font-medium">{formatCurrency(transaction.final_amount)}</p>
+                        <div className="mt-3 flex items-center justify-between">
+                          <div className="text-sm text-muted-foreground">
+                            {formatDate(transaction.created_at)}
                           </div>
-                          <div>
-                            <p className="text-muted-foreground">Payment Method</p>
-                            <p className="font-medium">{transaction.payment_method}</p>
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleViewDetails(transaction)}
+                            >
+                              View Details
+                            </Button>
+                            {isTransactionPayable(transaction) && (
+                              <Button
+                                size="sm"
+                                onClick={() => handlePayTransaction(transaction)}
+                                className="bg-green-600 hover:bg-green-700"
+                              >
+                                <CreditCard className="h-4 w-4 mr-1" />
+                                Pay
+                              </Button>
+                            )}
                           </div>
-                          <div>
-                            <p className="text-muted-foreground">Created</p>
-                            <p className="font-medium flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              {formatDate(transaction.created_at)}
-                            </p>
-                          </div>
-                          {transaction.paid_at && (
-                            <div>
-                              <p className="text-muted-foreground">Paid</p>
-                              <p className="font-medium">{formatDate(transaction.paid_at)}</p>
-                            </div>
-                          )}
                         </div>
-
-                        {transaction.discount_amount > 0 && (
-                          <div className="mt-3 pt-3 border-t">
-                            <div className="flex justify-between text-sm">
-                              <span>Subtotal:</span>
-                              <span>{formatCurrency(transaction.total_amount)}</span>
-                            </div>
-                            <div className="flex justify-between text-sm text-green-600">
-                              <span>Discount ({transaction.discount_percentage}%):</span>
-                              <span>-{formatCurrency(transaction.discount_amount)}</span>
-                            </div>
-                            <div className="flex justify-between font-medium">
-                              <span>Total:</span>
-                              <span>{formatCurrency(transaction.final_amount)}</span>
-                            </div>
-                          </div>
-                        )}
                       </CardContent>
                     </Card>
                   ))}
@@ -727,11 +772,191 @@ export default function UserDashboardPage() {
         }}
       />
 
-      {/* Topup History Modal */}
-      <TopupHistory 
-        open={showTopupHistory}
-        onOpenChange={setShowTopupHistory}
-      />
+      {/* Payment Modal for existing transactions */}
+      {paymentModalData && (
+        <Dialog open={showPaymentModal} onOpenChange={setShowPaymentModal}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5" />
+                Complete Payment
+              </DialogTitle>
+              <DialogDescription>
+                Complete your payment for transaction {paymentModalData.reference}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-6">
+              {paymentModalData.qr_url && (
+                <div className="flex justify-center">
+                  <div className="bg-white p-4 rounded-lg border">
+                    <img
+                      src={paymentModalData.qr_url}
+                      alt="Payment QR Code"
+                      className="w-48 h-48 object-contain"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <Card>
+                <CardContent className="pt-4">
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span>Reference:</span>
+                      <span className="font-mono text-xs">{paymentModalData.reference}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Amount:</span>
+                      <span className="font-semibold">{formatCurrency(paymentModalData.final_amount)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Payment:</span>
+                      <span>{paymentModalData.payment_name}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Status:</span>
+                      <Badge variant="secondary">{paymentModalData.status}</Badge>
+                    </div>
+                    {paymentModalData.pay_code && (
+                      <div className="flex justify-between">
+                        <span>Pay Code:</span>
+                        <span className="font-mono">{paymentModalData.pay_code}</span>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    window.open(paymentModalData.checkout_url, '_blank');
+                  }}
+                  className="flex-1"
+                >
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  Open Payment Page
+                </Button>
+                <Button
+                  onClick={() => setShowPaymentModal(false)}
+                  className="flex-1"
+                >
+                  Done
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Transaction Details Modal */}
+      {selectedTransaction && (
+        <Dialog open={showTransactionDetails} onOpenChange={setShowTransactionDetails}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <History className="h-5 w-5" />
+                Transaction Details
+              </DialogTitle>
+              <DialogDescription>
+                Detailed information for transaction {selectedTransaction.reference}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <Card>
+                <CardContent className="pt-4">
+                  <div className="space-y-3 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Reference:</span>
+                      <span className="font-mono text-xs">{selectedTransaction.reference}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Merchant Ref:</span>
+                      <span className="font-mono text-xs">{selectedTransaction.merchant_ref}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Quantity:</span>
+                      <span className="font-medium">{selectedTransaction.quantity} quota</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Payment Method:</span>
+                      <span className="font-medium">{selectedTransaction.payment_method}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Status:</span>
+                      {getTopupStatusBadge(selectedTransaction.status)}
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Created:</span>
+                      <span className="font-medium">{formatDate(selectedTransaction.created_at)}</span>
+                    </div>
+                    {selectedTransaction.paid_at && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Paid:</span>
+                        <span className="font-medium">{formatDate(selectedTransaction.paid_at)}</span>
+                      </div>
+                    )}
+                    {selectedTransaction.pay_code && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Pay Code:</span>
+                        <span className="font-mono">{selectedTransaction.pay_code}</span>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {selectedTransaction.discount_amount > 0 && (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm">Price Breakdown</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span>Subtotal:</span>
+                      <span>{formatCurrency(selectedTransaction.total_amount)}</span>
+                    </div>
+                    <div className="flex justify-between text-green-600">
+                      <span>Discount ({selectedTransaction.discount_percentage}%):</span>
+                      <span>-{formatCurrency(selectedTransaction.discount_amount)}</span>
+                    </div>
+                    <Separator />
+                    <div className="flex justify-between font-medium">
+                      <span>Total:</span>
+                      <span>{formatCurrency(selectedTransaction.final_amount)}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              <div className="flex gap-3">
+                {isTransactionPayable(selectedTransaction) && (
+                  <Button
+                    onClick={() => {
+                      setShowTransactionDetails(false);
+                      handlePayTransaction(selectedTransaction);
+                    }}
+                    className="flex-1 bg-green-600 hover:bg-green-700"
+                  >
+                    <CreditCard className="mr-2 h-4 w-4" />
+                    Pay Now
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  onClick={() => setShowTransactionDetails(false)}
+                  className={isTransactionPayable(selectedTransaction) ? "flex-1" : "w-full"}
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
