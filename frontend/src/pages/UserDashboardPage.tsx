@@ -17,7 +17,8 @@ import {
   DashboardData, 
   WindowsVersion, 
   InstallData, 
-  CreateInstallRequest 
+  CreateInstallRequest,
+  TopupTransaction
 } from '@/services/api';
 import { 
   Code, 
@@ -49,7 +50,9 @@ export default function UserDashboardPage() {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [windowsVersions, setWindowsVersions] = useState<WindowsVersion[]>([]);
   const [installHistory, setInstallHistory] = useState<InstallData[]>([]);
+  const [topupHistory, setTopupHistory] = useState<TopupTransaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingTopup, setIsLoadingTopup] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState<'install' | 'history' | 'topup'>('install');
   const [showTopupModal, setShowTopupModal] = useState(false);
@@ -70,6 +73,13 @@ export default function UserDashboardPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Load topup history when topup tab is selected
+  useEffect(() => {
+    if (activeTab === 'topup') {
+      loadTopupHistory();
+    }
+  }, [activeTab]);
 
   const loadData = async () => {
     try {
@@ -99,6 +109,25 @@ export default function UserDashboardPage() {
       });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadTopupHistory = async () => {
+    try {
+      setIsLoadingTopup(true);
+      const response = await apiService.getTopupHistory();
+      
+      if (response.data.success && response.data.data) {
+        setTopupHistory(response.data.data);
+      }
+    } catch (error: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Failed to load topup history',
+        description: error.response?.data?.message || 'Please try again.',
+      });
+    } finally {
+      setIsLoadingTopup(false);
     }
   };
 
@@ -166,6 +195,43 @@ export default function UserDashboardPage() {
       default:
         return <Badge variant="secondary">{status}</Badge>;
     }
+  };
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('id-ID', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getTopupStatusBadge = (status: string) => {
+    const statusConfig = {
+      'PAID': { variant: 'default' as const, label: 'Paid', className: 'bg-green-500' },
+      'UNPAID': { variant: 'secondary' as const, label: 'Unpaid', className: 'bg-yellow-500' },
+      'EXPIRED': { variant: 'destructive' as const, label: 'Expired', className: '' },
+      'FAILED': { variant: 'destructive' as const, label: 'Failed', className: '' },
+    };
+
+    const config = statusConfig[status as keyof typeof statusConfig] || 
+                   { variant: 'secondary' as const, label: status, className: '' };
+
+    return (
+      <Badge variant={config.variant} className={config.className}>
+        {config.label}
+      </Badge>
+    );
   };
 
   if (isLoading) {
@@ -533,41 +599,120 @@ export default function UserDashboardPage() {
         {activeTab === 'topup' && (
           <Card>
             <CardHeader>
-              <CardTitle>Topup History</CardTitle>
-              <CardDescription>
-                View your quota topup transaction history
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col space-y-4">
-                <div className="flex justify-between items-center">
-                  <p className="text-sm text-muted-foreground">
-                    Manage your quota and view transaction history
-                  </p>
-                  <div className="flex gap-2">
-                    <Button 
-                      variant="outline"
-                      onClick={() => setShowTopupHistory(true)}
-                    >
-                      <History className="h-4 w-4 mr-2" />
-                      View History
-                    </Button>
-                    <Button 
-                      onClick={() => setShowTopupModal(true)}
-                    >
-                      <Plus className="h-4 w-4 mr-2" />
-                      Topup Quota
-                    </Button>
-                  </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Topup History</CardTitle>
+                  <CardDescription>
+                    View your quota topup transaction history
+                  </CardDescription>
                 </div>
-                <div className="text-center py-8 border border-dashed rounded-lg">
-                  <History className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                  <p className="text-muted-foreground mb-2">Your topup transactions</p>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Click "View History" to see all your topup transactions and their status
-                  </p>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline"
+                    onClick={loadTopupHistory}
+                    disabled={isLoadingTopup}
+                  >
+                    {isLoadingTopup ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <History className="h-4 w-4 mr-2" />
+                    )}
+                    Refresh
+                  </Button>
+                  <Button 
+                    onClick={() => setShowTopupModal(true)}
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Topup Quota
+                  </Button>
                 </div>
               </div>
+            </CardHeader>
+            <CardContent>
+              {isLoadingTopup ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin" />
+                </div>
+              ) : topupHistory.length === 0 ? (
+                <div className="text-center py-8">
+                  <History className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                  <p className="text-muted-foreground mb-2">No transactions found</p>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Your topup history will appear here
+                  </p>
+                  <Button 
+                    onClick={() => setShowTopupModal(true)}
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Make Your First Topup
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {topupHistory.map((transaction) => (
+                    <Card key={transaction.id}>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 bg-primary/10 rounded-full flex items-center justify-center">
+                              <CreditCard className="h-5 w-5 text-primary" />
+                            </div>
+                            <div>
+                              <p className="font-medium">{transaction.quantity} Quota Purchase</p>
+                              <p className="text-sm text-muted-foreground flex items-center gap-1">
+                                <Code className="h-3 w-3" />
+                                {transaction.reference || transaction.merchant_ref}
+                              </p>
+                            </div>
+                          </div>
+                          {getTopupStatusBadge(transaction.status)}
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                          <div>
+                            <p className="text-muted-foreground">Amount</p>
+                            <p className="font-medium">{formatCurrency(transaction.final_amount)}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground">Payment Method</p>
+                            <p className="font-medium">{transaction.payment_method}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground">Created</p>
+                            <p className="font-medium flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              {formatDate(transaction.created_at)}
+                            </p>
+                          </div>
+                          {transaction.paid_at && (
+                            <div>
+                              <p className="text-muted-foreground">Paid</p>
+                              <p className="font-medium">{formatDate(transaction.paid_at)}</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {transaction.discount_amount > 0 && (
+                          <div className="mt-3 pt-3 border-t">
+                            <div className="flex justify-between text-sm">
+                              <span>Subtotal:</span>
+                              <span>{formatCurrency(transaction.total_amount)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm text-green-600">
+                              <span>Discount ({transaction.discount_percentage}%):</span>
+                              <span>-{formatCurrency(transaction.discount_amount)}</span>
+                            </div>
+                            <div className="flex justify-between font-medium">
+                              <span>Total:</span>
+                              <span>{formatCurrency(transaction.final_amount)}</span>
+                            </div>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -580,6 +725,10 @@ export default function UserDashboardPage() {
         onSuccess={() => {
           // Reload dashboard data after successful topup
           loadData();
+          // Also reload topup history if we're on that tab
+          if (activeTab === 'topup') {
+            loadTopupHistory();
+          }
         }}
       />
 
