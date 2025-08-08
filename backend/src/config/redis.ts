@@ -1,0 +1,213 @@
+import { createClient, RedisClientType } from 'redis';
+import { logger } from '../utils/logger.js';
+
+let redisClient: RedisClientType | null = null;
+
+export async function connectRedis(): Promise<RedisClientType> {
+  try {
+    const client = createClient({
+      socket: {
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT || '6379'),
+      },
+      password: process.env.REDIS_PASSWORD || undefined,
+      database: parseInt(process.env.REDIS_DB || '0'),
+    });
+
+    client.on('error', (err) => {
+      logger.error('Redis Client Error:', err);
+    });
+
+    client.on('connect', () => {
+      logger.info('Redis client connected');
+    });
+
+    client.on('ready', () => {
+      logger.info('Redis client ready');
+    });
+
+    client.on('end', () => {
+      logger.info('Redis client disconnected');
+    });
+
+    await client.connect();
+    redisClient = client;
+    
+    // Test the connection
+    await client.ping();
+    logger.info('Redis connection established successfully');
+    
+    return client;
+  } catch (error) {
+    logger.error('Failed to connect to Redis:', error);
+    throw error;
+  }
+}
+
+export function getRedisClient(): RedisClientType {
+  if (!redisClient) {
+    throw new Error('Redis client not initialized. Call connectRedis() first.');
+  }
+  return redisClient;
+}
+
+// Session management functions
+export class SessionManager {
+  private static readonly SESSION_PREFIX = 'session:';
+  private static readonly USER_SESSIONS_PREFIX = 'user_sessions:';
+  private static readonly BLACKLIST_PREFIX = 'blacklist:';
+  
+  static async createSession(userId: number, sessionData: any, expirationSeconds: number = 86400): Promise<string> {
+    const client = getRedisClient();
+    const sessionId = `${userId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const sessionKey = `${this.SESSION_PREFIX}${sessionId}`;
+    const userSessionsKey = `${this.USER_SESSIONS_PREFIX}${userId}`;
+    
+    await client.setEx(sessionKey, expirationSeconds, JSON.stringify(sessionData));
+    await client.sAdd(userSessionsKey, sessionId);
+    await client.expire(userSessionsKey, expirationSeconds);
+    
+    return sessionId;
+  }
+  
+  static async getSession(sessionId: string): Promise<any | null> {
+    const client = getRedisClient();
+    const sessionKey = `${this.SESSION_PREFIX}${sessionId}`;
+    
+    const sessionData = await client.get(sessionKey);
+    return sessionData ? JSON.parse(sessionData) : null;
+  }
+  
+  static async updateSession(sessionId: string, sessionData: any, expirationSeconds: number = 86400): Promise<void> {
+    const client = getRedisClient();
+    const sessionKey = `${this.SESSION_PREFIX}${sessionId}`;
+    
+    await client.setEx(sessionKey, expirationSeconds, JSON.stringify(sessionData));
+  }
+  
+  static async deleteSession(sessionId: string): Promise<void> {
+    const client = getRedisClient();
+    const sessionKey = `${this.SESSION_PREFIX}${sessionId}`;
+    
+    // Get session data to find user ID
+    const sessionData = await client.get(sessionKey);
+    if (sessionData) {
+      const data = JSON.parse(sessionData);
+      const userSessionsKey = `${this.USER_SESSIONS_PREFIX}${data.userId}`;
+      await client.sRem(userSessionsKey, sessionId);
+    }
+    
+    await client.del(sessionKey);
+  }
+  
+  static async deleteAllUserSessions(userId: number): Promise<void> {
+    const client = getRedisClient();
+    const userSessionsKey = `${this.USER_SESSIONS_PREFIX}${userId}`;
+    
+    const sessionIds = await client.sMembers(userSessionsKey);
+    if (sessionIds.length > 0) {
+      const sessionKeys = sessionIds.map(id => `${this.SESSION_PREFIX}${id}`);
+      await client.del(sessionKeys);
+      await client.del(userSessionsKey);
+    }
+  }
+  
+  static async blacklistToken(token: string, expirationSeconds: number): Promise<void> {
+    const client = getRedisClient();
+    const blacklistKey = `${this.BLACKLIST_PREFIX}${token}`;
+    
+    await client.setEx(blacklistKey, expirationSeconds, 'blacklisted');
+  }
+  
+  static async isTokenBlacklisted(token: string): Promise<boolean> {
+    const client = getRedisClient();
+    const blacklistKey = `${this.BLACKLIST_PREFIX}${token}`;
+    
+    const result = await client.get(blacklistKey);
+    return result !== null;
+  }
+  
+  static async getUserSessionCount(userId: number): Promise<number> {
+    const client = getRedisClient();
+    const userSessionsKey = `${this.USER_SESSIONS_PREFIX}${userId}`;
+    
+    return await client.sCard(userSessionsKey);
+  }
+}
+
+// Rate limiting functions
+export class RateLimiter {
+  private static readonly RATE_LIMIT_PREFIX = 'rate_limit:';
+  
+  static async checkRateLimit(key: string, maxRequests: number, windowSeconds: number): Promise<{ allowed: boolean; remaining: number; resetTime: number }> {
+    const client = getRedisClient();
+    const rateLimitKey = `${this.RATE_LIMIT_PREFIX}${key}`;
+    
+    const current = await client.get(rateLimitKey);
+    const now = Date.now();
+    
+    if (!current) {
+      await client.setEx(rateLimitKey, windowSeconds, '1');
+      return {
+        allowed: true,
+        remaining: maxRequests - 1,
+        resetTime: now + (windowSeconds * 1000)
+      };
+    }
+    
+    const count = parseInt(current);
+    if (count >= maxRequests) {
+      const ttl = await client.ttl(rateLimitKey);
+      return {
+        allowed: false,
+        remaining: 0,
+        resetTime: now + (ttl * 1000)
+      };
+    }
+    
+    await client.incr(rateLimitKey);
+    const ttl = await client.ttl(rateLimitKey);
+    
+    return {
+      allowed: true,
+      remaining: maxRequests - count - 1,
+      resetTime: now + (ttl * 1000)
+    };
+  }
+}
+
+// Cache functions
+export class CacheManager {
+  private static readonly CACHE_PREFIX = 'cache:';
+  
+  static async set(key: string, value: any, expirationSeconds: number = 3600): Promise<void> {
+    const client = getRedisClient();
+    const cacheKey = `${this.CACHE_PREFIX}${key}`;
+    
+    await client.setEx(cacheKey, expirationSeconds, JSON.stringify(value));
+  }
+  
+  static async get(key: string): Promise<any | null> {
+    const client = getRedisClient();
+    const cacheKey = `${this.CACHE_PREFIX}${key}`;
+    
+    const value = await client.get(cacheKey);
+    return value ? JSON.parse(value) : null;
+  }
+  
+  static async delete(key: string): Promise<void> {
+    const client = getRedisClient();
+    const cacheKey = `${this.CACHE_PREFIX}${key}`;
+    
+    await client.del(cacheKey);
+  }
+  
+  static async deletePattern(pattern: string): Promise<void> {
+    const client = getRedisClient();
+    const keys = await client.keys(`${this.CACHE_PREFIX}${pattern}`);
+    
+    if (keys.length > 0) {
+      await client.del(keys);
+    }
+  }
+}
